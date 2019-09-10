@@ -1,0 +1,473 @@
+library(rvest)
+library(tidyverse)
+library(data.table)
+library(tidytext)
+library(stringr)
+library(ggplot2)
+library(ggrepel)
+library(shiny)
+library(data.table)
+library(leaflet)
+library(plotly)
+library(corrplot)
+library(lubridate)
+library(readr)
+library(reshape2)
+library(ggmap)
+library(leaflet)
+# install.packages("shinythemes")
+library(shinythemes)
+# install.packages("shinyWidgets")
+library(shinyWidgets)
+
+ggmap::register_google(key = "AIzaSyCWJ8DwoFBs1kYzM82SSA-XAvBDXT8YJRA")
+
+bay <- ggmap(get_googlemap(center = c(longitude = -122, latitude = 37.9),
+                    zoom = 9, scale = 1, 
+                    maptype = "roadmap",
+                    color = "color"))
+
+  # leaflet() %>%
+  # addTiles() %>%
+  # setView(lng = -122,lat = 38, zoom = 7.5) %>%
+  # addMarkers(lat = boba.data$lat,
+  #            lng = boba.data$long, #west is negative, east is positive
+  #            # label = name,
+  #            popup = boba.data$name) #textbox for more description (long text that would take long to upload)
+
+
+boba.data <- read_csv("boba_bay_area.csv")
+
+city.data <- boba.data %>%
+  group_by(city) %>%
+  summarize(mean =  mean(rating), 
+            mean.lat = mean(lat),
+            mean.lng = mean(long))
+
+colnames(city.data) <- c("City", "Average Rating", "Latitude", "Longitude")
+
+city.rating <- bay + 
+  geom_point(data = city.data,
+             aes(col = class, x = Longitude, y = Latitude)) +
+  guides(alpha = FALSE) +
+  ggtitle("Average Yelp Rating by City") +
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank()) +
+  labs(color= "Yelp ratings")
+
+# city.rating.plotly <- ggplotly(city.rating, tooltip = c("City", "Average Rating"))
+
+# boba.map <- bay + 
+#   geom_point(data = boba.data,
+#              aes(col = factor(rating), x = long, y = lat), size = 2) +
+#   guides(alpha = FALSE) +
+#   ggtitle("Boba Bae in Your Area") +
+#   theme(plot.title = element_text(color = "black", size = 14, face = "bold.italic"),
+#         axis.title.x = element_blank(),
+#         axis.title.y = element_blank()) +
+#   labs(color= "Yelp ratings")
+
+## RANKING BY CITY
+city.data$`Average Rating` <- (city.data$`Average Rating`) - 2.5
+city.data <- city.data %>%
+  arrange(-city.data$`Average Rating`)
+
+city.data <- city.data %>%
+  mutate(class = ifelse(city.data$`Average Rating`>1.7, 
+                        "Top 10%",
+                        ifelse(city.data$`Average Rating`>1.456, 
+                               "Top 20%",
+                               "Rest")))
+
+city.data$class <- factor(city.data$class, levels = c("Top 10%", "Top 20%", "Rest"))
+
+# city.data %>%
+#   ggplot(aes(x = reorder(city.data$City, city.data$`Average Rating`), y = city.data$`Average Rating`)) +
+#   geom_bar(aes(fill = class), stat = "identity") +
+#   xlab("City") +
+#   ylab("Average Rating") +
+#   scale_y_continuous(labels = c("2.5", "3", "3.5", "4", "4.5")) +
+#   coord_flip()+
+#   ggtitle("Average Rating by City (including ties)")
+
+## RANKING BY NAME
+store.data <- boba.data %>%
+  group_by(name) %>%
+  summarize(mean =  mean(rating)) %>%
+  arrange(mean)
+
+store.data <- store.data %>%
+  mutate(class = ifelse(store.data$mean == 2, 
+                        "Lowest",
+                        ifelse(store.data$mean == 2.5, 
+                               "Second to the Lowest",
+                               ifelse(store.data$mean == 4.5,
+                                      "Second to the Highest",
+                                      "Highest"))))
+store.data.low <- store.data %>%
+  filter(mean <= 2.5)
+
+store.data.high <- store.data %>%
+  filter(mean >= 4.5)
+
+store.data.low.high <- rbind(store.data.low, store.data.high)
+
+store.joined <- merge(store.data.low.high, boba.data[,c(3,5,6,7,8)], by = "name")
+
+# city.data %>%
+#   ggplot(aes(x = reorder(city.data$City, city.data$`Average Rating`), y = city.data$`Average Rating`)) +
+#   geom_bar(aes(fill = class), stat = "identity") +
+#   xlab("City") +
+#   ylab("Average Rating") +
+#   scale_y_continuous(labels = c("2.5", "3", "3.5", "4", "4.5")) +
+#   coord_flip() +
+#   ggtitle("Average Rating by City (including ties)")
+# 
+# bay + 
+#   geom_point(data = city.data,
+#              aes(col = factor(class), x = city.data$Longitude, y = city.data$Latitude), size = 2) +
+#   guides(alpha = FALSE) +
+#   ggtitle("Ranking by City") +
+#   theme(plot.title = element_text(color = "black", size = 14, face = "bold.italic"),
+#         axis.title.x = element_blank(),
+#         axis.title.y = element_blank()) +
+#   labs(color= "Class")
+  
+ui <- fluidPage(
+  theme = shinytheme("sandstone"),
+  setBackgroundColor(color = "ghostwhite", gradient = c("linear",
+                                                        "radial"), direction = c("bottom", "top", "right", "left")),
+  titlePanel("Where's My Boba Bae?"),
+  sidebarLayout(
+    sidebarPanel(
+      tags$head(
+        tags$style("pre { white-space: pre-wrap; word-break: keep-all; }")),
+      fluidRow(textOutput(outputId = "intro")),
+      br(), br(), br(), br(), br(), br(),br(), br(), br(), br(), br(), br(),
+      uiOutput("img")
+    ),
+    mainPanel(navbarPage(title = "Categories",
+                         tabPanel("The snapshot",
+                                  verbatimTextOutput(outputId = "snapshot"),
+                                  plotlyOutput(outputId = "whole.map")),
+                         tabPanel("Ranking by Cities",
+                                  tabsetPanel(
+                                    tabPanel("City",
+                                             plotOutput(outputId = "city", width = "100%", height = "800px")),
+                                    tabPanel("Store Map",
+                                             plotlyOutput(outputId = "store.map")),
+                                    tabPanel("Preferred City Ranking",
+                                             radioButtons(inputId = "class",
+                                                          label = "Choose your preferred city ranking level",
+                                                          choices = c("Top 10%", "Top 20%", "Rest"),
+                                                          selected = city.data$class[1]),
+                                             leafletOutput(outputId = "city.map"),
+                                             tableOutput("levelData"),
+                                             br()))),
+                         tabPanel("Ranking by Stores",
+                                  tabsetPanel(
+                                    tabPanel("Low-ranked stores",
+                                             plotOutput(outputId = "store.low")),
+                                    tabPanel("High-ranked stores",
+                                             plotOutput(outputId = "store.high", width = "100%", height = "800px")),
+                                    tabPanel("Store Rankings in Map",
+                                             plotlyOutput(outputId = "store.ranking")),
+                                    tabPanel("Preferred Store Ranking",
+                                             radioButtons(inputId = "store",
+                                                          label = "Choose your preferred store ranking level",
+                                                          choices = c("Lowest", "Second to the Lowest", "Second to the Highest", "Highest"),
+                                                          selected = store.joined$class[1]),
+                                             leafletOutput(outputId = "store.select"),
+                                             tableOutput("storeData"),
+                                             br()))),
+                         tabPanel("Boba Bae Options",
+                                  selectInput(inputId = "select",
+                                              label = "Find your potential boba bae in your preferred city!",
+                                              choices = boba.data$city,
+                                              selected = boba.data$city[1]),
+                                  leafletOutput(outputId = "boba.map"),
+                                  textOutput(outputId = "text"),
+                                  br()))
+                                  )))
+
+server <- function(input, output, session) {
+  output$intro <- renderText(
+    paste("You 1) have never tried boba before; 2) have just recognized the contagious presence of boba, but don't know which one to try (because there are just so many of them!); or 3) are a boba enthusiast and are willing to try more but need help finding them efficiently. Worry no more. This interactive app helps you find your Boba Bae in a pool of 603 boba stores located in the Bay Area.")
+  )
+  
+  output$img <- renderUI({
+    HTML('<center><img src = "https://i2.wp.com/talkboba.com/wp-content/uploads/2019/05/logo@2x.png?w=2000&ssl=1.jpg" height = "50%" width = "50%"> </center>')
+  })
+  
+  output$whole.map <- renderPlotly({
+    
+    bay.whole.map <- bay +
+      geom_point(data = boba.data,
+                 aes(col = factor(rating), x = long, y = lat), size = 2) +
+      guides(alpha = FALSE) +
+      ggtitle("Boba Bae in Your Area") +
+      theme(plot.title = element_text(color = "black", size = 14, face = "bold.italic"),
+            axis.title.x = element_blank(),
+            axis.title.y = element_blank()) +
+      theme(legend.position = "top") +
+      labs(color= "Yelp ratings")
+
+    mytext = paste("Store =", boba.data$name, "\n", "Yelp Rating =", boba.data$rating)
+    
+    pp = plotly_build(bay.whole.map)
+    style(pp, text = mytext, hoverinfo= "text") %>%
+      layout(width = 700, height = 700, legend = list(orientation = "h",
+                                                      xanchor = "center",
+                                                      x = 0.5, y = 1)) %>%
+      config(displayModeBar = F) %>%
+      layout(xaxis = list(fixedRange = TRUE)) %>%
+      layout(yaxis = list(fixedRange = TRUE)) 
+    
+    # color <- colorFactor(palette = c("red", "dark orange", "green", "dark green", "turquoise", "purple", "pink"), domain = levels(boba.data$rating))
+    # 
+    # boba.data %>%
+    #   leaflet() %>%
+    #   addTiles() %>%
+    #   setView(lng = -122,lat = 37.9, zoom = 8) %>%
+    #   addCircleMarkers(lat = ~lat,
+    #                    lng = ~long,
+    #                    clusterOptions = markerClusterOptions(),
+    #                    popup = paste(boba.data$name, "<br>",
+    #                                  "rating:", boba.data$rating, "<br>"),
+    #                    color = ~color(rating)) %>%
+    #   addLegend(position = "topright", color,
+    #             values = ~rating, title = "Store Ratings", opacity = 1)
+    
+  })
+  
+  output$snapshot <- renderText({
+    paste("This maps shows all the 603 boba stores, ranked by color. Though the greater San Jose area is the most populated region (and note how the high-ranked ones are usually located there), there are other options scattered around in the Bay Area.")
+  })
+  
+  output$boba.map <- renderLeaflet({
+    input.city <- boba.data %>%
+      mutate(is.selected.city = 
+               ifelse(boba.data$city == input$select,
+                      "city",
+                      "not.city")) %>%
+      filter(is.selected.city == "city")
+  
+    input.city %>%
+      leaflet() %>%
+      setView(lng = -122,lat = 37.9, zoom = 8) %>%
+      addTiles() %>%
+      addCircleMarkers(lat = ~lat,
+                       lng = ~long, 
+                       clusterOptions = markerClusterOptions(),
+                       popup = paste(input.city$name, "<br>",
+                                     "rating:", input.city$rating, "<br>")) #zipcode also needs to be a string
+    
+  })
+
+  output$city.rating <- renderPlot({
+    
+    city.data %>%
+      ggplot(aes(x = "City", y = "Average Rating")) %>%
+      geom_bar(stat = "identity") %>%
+      theme(axis.text.y = element_text(size = 14))
+    
+  })
+  
+  output$city <- renderPlot({
+    city.data %>%
+      ggplot(aes(x = reorder(city.data$City, city.data$`Average Rating`), y = city.data$`Average Rating`)) +
+      geom_bar(aes(fill = class), stat = "identity") +
+      xlab("City") +
+      ylab("Average Rating") +
+      scale_y_continuous(labels = c("2.5", "3", "3.5", "4", "4.5")) +
+      coord_flip() +
+      ggtitle("Average Rating by City (including ties)") +
+      theme(plot.margin = unit(c(0, 2, 0, 2), "cm"),
+            axis.text.y = element_text(size = 9))
+      
+  })
+ 
+  output$store.title <- renderText({
+    paste("Average Ranking by Stores")
+    
+  })
+  output$store.low <- renderPlot({
+    store.data.low %>%
+      ggplot(aes(x = reorder(store.data.low$name, store.data.low$mean), y = store.data.low$mean)) +
+      geom_bar(aes(fill = as.factor(class)), stat = "identity") +
+      xlab("Store") +
+      ylab("Average Rating") +
+      coord_flip()+
+      ggtitle("All-time low") +
+      scale_fill_discrete("Class") 
+  }) 
+  
+  output$store.high <- renderPlot({
+    store.data.high %>%
+      ggplot(aes(x = reorder(store.data.high$name, store.data.high$mean), y = store.data.high$mean)) +
+      geom_bar(aes(fill = as.factor(class)), stat = "identity") +
+      xlab("Store") +
+      ylab("Average Rating") +
+      coord_flip()+
+      ggtitle("All-time high") +
+      scale_fill_discrete("Class") +
+      scale_x_discrete(expand = c(0, 0.5)) +
+      theme(plot.margin = unit(c(0, 2, 0, 2), "cm"),
+            axis.text.y = element_text(size = 9))
+  })
+  
+  output$store.ranking <- renderPlotly({
+    store.level <- bay +
+      geom_point(data = store.joined,
+                 aes(col = factor(class), x = store.joined$long, y = store.joined$lat), size = 2) +
+      guides(alpha = FALSE) +
+      ggtitle("Overview of Stores by Rankings") +
+      theme(plot.title = element_text(color = "black", size = 14, face = "bold.italic"),
+            axis.title.x = element_blank(),
+            axis.title.y = element_blank()) +
+      labs(color = "class")
+
+    store.text = paste("Store =", store.joined$name, "\n", "Average Rating =", store.joined$mean)
+
+    store.plotly = plotly_build(store.level)
+    style(store.plotly, text = store.text, hoverinfo= "text") %>%
+      layout(width = 700, height = 700, legend = list(orientation = "h",
+                                                      xanchor = "center",
+                                                      x = 0.5, y = 1.01)) %>%
+      config(displayModeBar = F) %>%
+      layout(xaxis = list(fixedRange = TRUE)) %>%
+      layout(yaxis = list(fixedRange = TRUE)) 
+    
+    # color <- colorFactor(palette = c("red", "green", "pink", "purple"), domain = levels(boba.data$rating))
+    # 
+    # store.joined %>%
+    #   leaflet() %>%
+    #   addTiles() %>%
+    #   setView(lng = -122,lat = 37.9, zoom = 8) %>%
+    #   # addPolygons() %>%
+    #   addCircleMarkers(lat = ~lat,
+    #                    lng = ~long, 
+    #                    clusterOptions = markerClusterOptions(),
+    #                    popup = paste(store.joined$name, "<br>",
+    #                                  "rating:", store.joined$mean, "<br>"),
+    #                    color = ~color(mean)) %>%
+    #   addLegend(position = "topright", color,
+    #             values = ~mean, title = "Store Ratings", opacity = 1)
+    
+  })
+  
+  output$store.select <- renderLeaflet({
+    store.data <- store.joined %>%
+      filter(class == input$store)
+    
+    # store.level <- bay + 
+    #   geom_point(data = store.data,
+    #              aes(col = factor(class), x = store.data$long, y = store.data$lat), size = 2) +
+    #   guides(alpha = FALSE) +
+    #   ggtitle("Stores by Preferred Rankings") +
+    #   theme(plot.title = element_text(color = "black", size = 10, face = "italic"),
+    #         axis.title.x = element_blank(),
+    #         axis.title.y = element_blank()) +
+    #   theme(legend.position = "none")
+    # 
+    # store.text = paste("Store =", store.data$name, "\n", "Average Rating =", store.data$mean)
+    # 
+    # store.plotly = plotly_build(store.level)
+    # style(store.plotly, text = store.text, hoverinfo= "text")
+    # 
+    # color <- colorFactor(palette = c("red", "green", "pink", "purple"), domain = levels(boba.data$rating))
+
+    store.data %>%
+      leaflet() %>%
+      addTiles() %>%
+      setView(lng = -122,lat = 37.9, zoom = 8) %>%
+      # addPolygons() %>%
+      addCircleMarkers(lat = ~lat,
+                       lng = ~long,
+                       clusterOptions = markerClusterOptions(),
+                       popup = paste(store.data$name, "<br>",
+                                     "rating:", store.data$mean, "<br>"),
+                       color = ~color(mean)) %>%
+      addLegend(position = "topright", color,
+                values = ~mean, title = "Store Ratings", opacity = 1)
+  })
+  
+  output$city.map <- renderLeaflet({
+    
+    input.class <- city.data %>%
+      mutate(is.selected.class = 
+               ifelse(city.data$class == input$class,
+                      "class", 
+                      "not.class")) %>%
+      filter(is.selected.class == "class")
+    
+    input.class %>%
+      leaflet() %>%
+      addTiles() %>%
+      setView(lng = -122,lat = 37.9, zoom = 8) %>%
+      addCircleMarkers(lat = ~Latitude,
+                       lng = ~Longitude, 
+                       clusterOptions = markerClusterOptions(),
+                       popup = paste(input.class$class, "<br>",
+                                     "City: ", input.class$City, "<br>")) #zipcode also needs to be a string
+    
+  })
+  
+  output$store.map <- renderPlotly({
+    city.data.adjusted <- city.data %>%
+      mutate(adjusted.rating = city.data$`Average Rating` + 2.5)
+    
+    city.data.adjusted$adjusted.rating <- round(city.data.adjusted$adjusted.rating, digit = 2)
+
+    snapshot.level <- bay + 
+      geom_point(data = city.data.adjusted,
+                 aes(col = factor(class), x = city.data.adjusted$Longitude, y = city.data.adjusted$Latitude), size = 2) +
+      guides(alpha = FALSE) +
+      ggtitle("Snapshot of city rankings") + 
+      theme(plot.title = element_text(color = "black", size = 10, face = "italic"),
+            axis.title.x = element_blank(),
+            axis.title.y = element_blank()) +
+      labs(color= "Class")
+    
+    snapshot.text = paste("City =", city.data.adjusted$City, "\n", "Average Rating =", city.data.adjusted$adjusted.rating)
+    
+    snapshot.plotly = plotly_build(snapshot.level)
+    style(snapshot.plotly, text = snapshot.text, hoverinfo= "text") %>%
+      layout(width = 700, height = 700, legend = list(orientation = "h",
+                                                      xanchor = "center",
+                                                      x = 0.5, y = 1)) %>%
+      config(displayModeBar = F) %>%
+      layout(xaxis = list(fixedRange = TRUE)) %>%
+      layout(yaxis = list(fixedRange = TRUE)) 
+  })
+  
+  output$text <- renderText({
+    city.ranking <- city.data %>%
+      filter(City == input$select) %>% #take data set and give only one row with state name = whatever the user clicks
+      select(`Average Rating`) 
+    
+    city.ranking <- city.ranking + 2.5
+    city.ranking <- round(city.ranking, digits = 2)
+    
+    paste("You have just clicked on", input$select,
+          ", and that city's average rating of boba stores is", city.ranking, ". See 'Ranking by Cities' for detailed information about respective cities.")
+  })
+  
+  output$levelData <- renderTable({
+    city.level.filter <- city.data %>%
+      mutate(level.filter <- city.data$`Average Rating` + 2.5)
+    
+   colnames(city.level.filter) <- c("City", "Adj. Average Rating", "Lat", "Long", "Class", "Average Rating")
+    
+    level.filter <- subset(city.level.filter[,c(1,6)], city.data$class == input$class)
+  })
+  
+  output$storeData <- renderTable({
+    colnames(store.joined) <- c("Name", "Mean Rating", "Class", "Address", "City", "Lat", "Long")
+    
+    store.filter <- subset(store.joined[,c(1,4,5)], store.joined$Class == input$store)
+  })
+}
+
+shinyApp(ui = ui, server = server)
+
